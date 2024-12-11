@@ -18,9 +18,35 @@ except Exception as e:
     print(f"Error initializing FireRedTTS: {e}")
     raise e
 
-# 创建输出目录
+# 创建输出和引导音频目录
 output_dir = "./outputs"
+reference_dir = "./reference_audios"
 os.makedirs(output_dir, exist_ok=True)
+os.makedirs(reference_dir, exist_ok=True)
+
+def get_reference_audios():
+    """
+    获取引导音频目录下的所有 wav 文件
+    """
+    if not os.path.exists(reference_dir):
+        return []
+    
+    wav_files = [f for f in os.listdir(reference_dir) if f.lower().endswith('.wav')]
+    if not wav_files:
+        print("Warning: No wav files found in reference_audios directory")
+        return []
+    
+    return [os.path.join(reference_dir, f) for f in wav_files]
+
+def update_audio_input(choice):
+    """
+    根据下拉菜单选择更新音频输入
+    """
+    if not choice:
+        return None
+    if choice == "请选择引导音频...":
+        return None
+    return choice
 
 def clean_text(text):
     """
@@ -154,10 +180,13 @@ def merge_audio(audio_segments):
 
 # 定义生成 TTS 音频的函数
 def generate_tts(prompt_wav_path, text, lang, segment_length=40):
+    # 从显示文本中提取实际的语言代码
+    lang_code = lang.split()[0]  # 获取第一个空格前的内容（即 "zh"、"en" 或 "auto"）
+    
     try:
         print(f"Input prompt_wav_path: {prompt_wav_path}")
         print(f"Input text: {text}")
-        print(f"Input lang: {lang}")
+        print(f"Input lang: {lang_code}")  # 使用提取的语言代码
         print(f"Segment length: {segment_length}")
         
         # 使用传入的分段长度参数
@@ -176,7 +205,7 @@ def generate_tts(prompt_wav_path, text, lang, segment_length=40):
             rec_wavs = tts.synthesize(
                 prompt_wav=prompt_wav_path,
                 text=segment,
-                lang=lang,
+                lang=lang_code,
             )
             audio_segments.append(rec_wavs.detach().cpu())
         
@@ -207,6 +236,16 @@ def generate_tts(prompt_wav_path, text, lang, segment_length=40):
         error_message = f"Error during TTS synthesis: {str(e)}"
         print(error_message)
         return None
+
+def get_language_choices():
+    """
+    获取支持的语言选项，返回选项列表和默认值
+    """
+    return [
+        {"value": "zh", "label": "zh (中文)"},
+        {"value": "en", "label": "en (英文)"},
+        {"value": "auto", "label": "auto (自动检测)"}
+    ]
 
 # 定义自定义主题
 custom_theme = gr.themes.Soft(
@@ -241,22 +280,32 @@ with gr.Blocks(theme=custom_theme, css="""
     .gradio-container {
         max-width: 1200px !important;
         margin: auto;
-        padding: 2rem;
+        padding: 1rem;
     }
     
     .main-header {
         text-align: center;
-        margin-bottom: 2rem;
+        margin-bottom: 0.2rem;
         color: var(--primary-600);
-        font-size: 2.25rem;
+        font-size: 1.8rem;
         font-weight: bold;
+        padding: 0.3rem;
     }
     
     .description {
         text-align: center;
         color: var(--neutral-600);
-        margin-bottom: 2rem;
-        font-size: 1.1rem;
+        margin-bottom: 0.8rem;
+        font-size: 0.9rem;
+        padding: 0;
+        margin-top: -0.2rem;
+    }
+    
+    .header-container {
+        margin-bottom: 1rem;
+        background: var(--neutral-50);
+        border-radius: 8px;
+        padding: 0.5rem;
     }
     
     .gr-button-primary {
@@ -293,38 +342,76 @@ with gr.Blocks(theme=custom_theme, css="""
         padding: 1.5rem;
         border-radius: 12px;
         box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.1);
+        gap: 0.5rem !important;
     }
     
     .gr-box {
         border-radius: 8px;
         background: var(--neutral-50);
     }
+    
+    .reference-note {
+        color: var(--neutral-600);
+        font-size: 0.9rem;
+        margin-top: 0.5rem;
+        font-style: italic;
+    }
+    
+    .gr-row {
+        margin-bottom: 0.5rem !important;
+    }
+    
+    .gr-input-label, .gr-dropdown-label {
+        margin-bottom: 0.2rem !important;
+    }
 """) as app:
-    gr.Markdown(
-        "# FireRedTTS 语音合成系统", 
-        elem_classes=["main-header"]
-    )
-    gr.Markdown(
-        "基于深度学习的高质量语音合成系统，支持中文和英文。",
-        elem_classes=["description"]
-    )
+    with gr.Row(elem_classes="header-container"):
+        with gr.Column():
+            gr.Markdown(
+                "# FireRedTTS 语音合成系统", 
+                elem_classes=["main-header"]
+            )
+            gr.Markdown(
+                "基于深度学习的高质量语音合成系统，支持中文和英文。",
+                elem_classes=["description"]
+            )
     
     with gr.Row():
         with gr.Column(scale=1):
-            input_prompt_wav = gr.Audio(
-                label="提示音频 (wav 格式)", 
-                type="filepath"
+            # 添加引导音频选择下拉菜单
+            reference_files = get_reference_audios()
+            choices = ["请选择引导音频..."] + reference_files if reference_files else ["请选择引导音频..."]
+            
+            reference_dropdown = gr.Dropdown(
+                choices=choices,
+                value="请选择引导音频..." if choices else None,
+                label="选择引导音频",
+                info="从 reference_audios 目录中选择预设的引导音频"
             )
+            
+            input_prompt_wav = gr.Audio(
+                label="或上传新的引导音频 (wav 格式)", 
+                type="filepath",
+                elem_classes="audio-input"
+            )
+            
+            if not reference_files:
+                gr.Markdown(
+                    "提示：您可以将常用的引导音频文件放在 reference_audios 目录下",
+                    elem_classes=["reference-note"]
+                )
+        
         with gr.Column(scale=2):
             input_text = gr.Textbox(
                 label="输入文本", 
                 placeholder="请输入需要合成的文本...",
-                lines=5
+                lines=4
             )
-            input_lang = gr.Textbox(
-                label="语言", 
-                value="zh", 
-                placeholder="默认 zh (中文)"
+            input_lang = gr.Dropdown(
+                choices=[choice["label"] for choice in get_language_choices()],
+                value="zh (中文)",
+                label="选择语言",
+                info="选择文本语言或使用自动检测"
             )
     
     with gr.Row():
@@ -351,9 +438,22 @@ with gr.Blocks(theme=custom_theme, css="""
             size="lg"
         )
     
+    # 添加下拉菜单选择事件
+    reference_dropdown.change(
+        fn=update_audio_input,
+        inputs=[reference_dropdown],
+        outputs=[input_prompt_wav]
+    )
+    
+    # 生成按钮事件
     submit_button.click(
         fn=generate_tts,
-        inputs=[input_prompt_wav, input_text, input_lang, segment_length],
+        inputs=[
+            input_prompt_wav,  # 如果下拉菜单选择了音频，这里会被更新
+            input_text,
+            input_lang,
+            segment_length
+        ],
         outputs=output_audio
     )
 
